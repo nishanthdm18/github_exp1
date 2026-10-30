@@ -1,0 +1,137 @@
+#!/usr/bin/env python3
+"""Simple Bluetooth RFCOMM chat. Requires PyBluez (pip install pybluez)."""
+
+import argparse
+import socket
+import sys
+import threading
+
+try:
+	import bluetooth
+except ImportError:
+	bluetooth = None
+
+SERVICE_NAME = "BitChat"
+SERVICE_ID = "00001101-0000-1000-8000-00805F9B34FB"  # Serial Port Profile
+
+
+def require_bluetooth():
+	if bluetooth is None:
+		raise SystemExit("PyBluez is required. Install it with: pip install pybluez")
+
+
+def receive_messages(sock):
+	"""Print complete newline-delimited messages until the connection closes."""
+	pending = b""
+	try:
+		while True:
+			data = sock.recv(1024)
+			if not data:
+				break
+			pending += data
+			while b"\n" in pending:
+				line, pending = pending.split(b"\n", 1)
+				print("\nPeer: " + line.decode("utf-8", errors="replace"))
+				print("You: ", end="", flush=True)
+	except OSError:
+		pass
+	finally:
+		print("\nPeer disconnected.")
+
+
+def chat(sock):
+	sock.settimeout(None)
+	receiver = threading.Thread(target=receive_messages, args=(sock,), daemon=True)
+	receiver.start()
+	try:
+		while True:
+			message = input("You: ")
+			if message.strip().lower() in {"/quit", "/exit"}:
+				break
+			sock.sendall(message.encode("utf-8") + b"\n")
+	except (EOFError, KeyboardInterrupt):
+		pass
+	except OSError as exc:
+		print(f"Connection error: {exc}", file=sys.stderr)
+	finally:
+		try:
+			sock.shutdown(socket.SHUT_RDWR)
+		except OSError:
+			pass
+		sock.close()
+
+
+def run_server():
+	require_bluetooth()
+	server = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
+	try:
+		server.bind(("", bluetooth.PORT_ANY))
+		server.listen(1)
+		port = server.getsockname()[1]
+		bluetooth.advertise_service(
+			server,
+			SERVICE_NAME,
+			service_id=SERVICE_ID,
+			service_classes=[SERVICE_ID, bluetooth.SERIAL_PORT_CLASS],
+			profiles=[bluetooth.SERIAL_PORT_PROFILE],
+		)
+		print(f"Waiting for a Bluetooth chat connection on RFCOMM channel {port}...")
+		client, address = server.accept()
+		print(f"Connected to {address[0]}. Type /quit to leave.")
+		chat(client)
+	finally:
+		try:
+			bluetooth.stop_advertising(server)
+		except (AttributeError, OSError):
+			pass
+		server.close()
+
+
+def run_client(address):
+	require_bluetooth()
+	client = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
+	try:
+		if address:
+			target = address
+		else:
+			print("Searching for BitChat devices...")
+			services = bluetooth.find_service(name=SERVICE_NAME)
+			if not services:
+				raise SystemExit("No BitChat service found. Start the server and try again.")
+			target = services[0]["host"]
+			channel = services[0]["port"]
+			client.connect((target, channel))
+			print(f"Connected to {target}. Type /quit to leave.")
+			chat(client)
+			return
+
+		channel = bluetooth.find_service(name=SERVICE_NAME, address=target)
+		if channel:
+			port = channel[0]["port"]
+		else:
+			try:
+				port = int(input(f"RFCOMM channel for {target}: "))
+			except ValueError:
+				raise SystemExit("Channel must be a number.")
+		client.connect((target, port))
+		print(f"Connected to {target}. Type /quit to leave.")
+		chat(client)
+	finally:
+		client.close()
+
+
+def main():
+	parser = argparse.ArgumentParser(description="Chat over Bluetooth RFCOMM")
+	modes = parser.add_mutually_exclusive_group(required=True)
+	modes.add_argument("--server", action="store_true", help="wait for a peer")
+	modes.add_argument("--client", metavar="ADDRESS", nargs="?", const="",
+					   help="connect to a peer; omit ADDRESS to discover BitChat")
+	args = parser.parse_args()
+	if args.server:
+		run_server()
+	else:
+		run_client(args.client)
+
+
+if __name__ == "__main__":
+	main()

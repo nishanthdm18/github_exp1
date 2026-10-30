@@ -1,6 +1,3 @@
-Create `date converter.py` with this command-line date converter:
-
-````python
 import argparse
 from datetime import datetime
 
@@ -21,10 +18,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-````
-
-Example: `python3 "date converter.py" 2026-10-30`
-Here is the complete code for `date_converter.py`:
-
-```python
-import argparse
